@@ -441,8 +441,37 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Hidden debug command to check scheduler + DB health from Telegram."""
+    from scheduler import _scheduler
+    from db import get_due_reminders, get_reminders
+    from datetime import datetime, timezone
+
+    chat_id = update.effective_chat.id
+    sched_status = "✅ running" if (_scheduler and _scheduler.running) else "❌ NOT running"
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    try:
+        all_mine = get_reminders(chat_id)
+        due = get_due_reminders()
+        db_status = f"✅ connected — {len(all_mine)} pending reminder(s)"
+        due_str = f"{len(due)} due right now"
+    except Exception as e:
+        db_status = f"❌ DB error: {e}"
+        due_str = "unknown"
+
+    await update.message.reply_text(
+        f"🔧 *Debug Info*\n\n"
+        f"🕐 Server UTC: `{now_utc}`\n"
+        f"📡 Scheduler: {sched_status}\n"
+        f"🗄 Database: {db_status}\n"
+        f"⏰ Reminders due: {due_str}",
+        parse_mode="Markdown",
+    )
+
+
 telegram_app.add_handler(CommandHandler("start",  start))
-telegram_app.add_handler(CommandHandler("help",   help_cmd))
+telegram_app.add_handler(CommandHandler("debug",  debug_cmd))
 telegram_app.add_handler(CommandHandler("new",    new_reminder))
 telegram_app.add_handler(CommandHandler("list",   list_reminders))
 telegram_app.add_handler(CommandHandler("delete", delete_cmd))
@@ -458,7 +487,7 @@ async def lifespan(app: FastAPI):
     webhook_endpoint = f"{WEBHOOK_URL}/webhook"
     await telegram_app.bot.set_webhook(url=webhook_endpoint)
     logger.info(f"Webhook set → {webhook_endpoint}")
-    start_scheduler(telegram_app.bot)
+    await start_scheduler(telegram_app.bot)
     yield
     stop_scheduler()
     await telegram_app.shutdown()
