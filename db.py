@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-# Connection pool (min 1, max 5) — avoids opening a new connection on every call
 _pool: pool.SimpleConnectionPool | None = None
 
 
@@ -35,11 +34,13 @@ def init_db():
                 id          SERIAL PRIMARY KEY,
                 chat_id     BIGINT      NOT NULL,
                 message     TEXT        NOT NULL,
-                run_time    TIMESTAMP   NOT NULL,   -- stored as proper timestamp
-                repeat_type TEXT        NOT NULL,   -- 'once' | 'weekly' | 'monthly'
+                run_time    TIMESTAMP   NOT NULL,
+                repeat_type TEXT        NOT NULL DEFAULT 'once',
                 sent        BOOLEAN     NOT NULL DEFAULT FALSE
             )
         """)
+        # Add daily support to existing tables if column exists but value was never used
+        # (no schema change needed — just behavioral)
         conn.commit()
         cur.close()
         logger.info("DB initialised")
@@ -52,10 +53,7 @@ def add_reminder(chat_id: int, message: str, run_time_str: str, repeat_type: str
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            INSERT INTO reminders (chat_id, message, run_time, repeat_type)
-            VALUES (%s, %s, %s::timestamp, %s)
-            """,
+            "INSERT INTO reminders (chat_id, message, run_time, repeat_type) VALUES (%s, %s, %s::timestamp, %s)",
             (chat_id, message, run_time_str, repeat_type),
         )
         conn.commit()
@@ -65,12 +63,17 @@ def add_reminder(chat_id: int, message: str, run_time_str: str, repeat_type: str
 
 
 def get_reminders(chat_id: int):
-    """Return (id, message, run_time, repeat_type) for a user's reminders."""
+    """Return (id, message, run_time, repeat_type) for upcoming reminders."""
     conn = _conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, message, run_time, repeat_type FROM reminders WHERE chat_id = %s ORDER BY run_time",
+            """
+            SELECT id, message, run_time, repeat_type
+            FROM reminders
+            WHERE chat_id = %s AND sent = FALSE
+            ORDER BY run_time
+            """,
             (chat_id,),
         )
         rows = cur.fetchall()
@@ -81,16 +84,12 @@ def get_reminders(chat_id: int):
 
 
 def get_due_reminders():
-    """Return all reminders that are due now and not yet marked sent."""
+    """Return all reminders due now, not yet sent."""
     conn = _conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT id, chat_id, message, run_time, repeat_type
-            FROM reminders
-            WHERE run_time <= NOW() AND sent = FALSE
-            """
+            "SELECT id, chat_id, message, run_time, repeat_type FROM reminders WHERE run_time <= NOW() AND sent = FALSE"
         )
         rows = cur.fetchall()
         cur.close()
@@ -111,22 +110,41 @@ def mark_sent(reminder_id: int):
 
 
 def reschedule(reminder_id: int, repeat_type: str):
-    """Advance run_time for weekly/monthly reminders and reset sent=FALSE."""
-    if repeat_type == "weekly":
-        interval = "7 days"
-    elif repeat_type == "monthly":
-        interval = "1 month"
-    else:
-        return  # one-time: leave as sent
+    """Advance run_time for repeating reminders and reset sent=FALSE."""
+    interval_map = {
+        "daily":   "1 day",
+        "weekly":  "7 days",
+        "monthly": "1 month",
+    }
+    interval = interval_map.get(repeat_type)
+    if not interval:
+        return  # one-time: leave as sent=TRUE
 
     conn = _conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            f"UPDATE reminders SET run_time = run_time + INTERVAL '{interval}', sent = FALSE WHERE id = %s",
-            (reminder_id,),
+            f"UPDATE reminders SET run_time = run_time + INTERVAL %s, sent = FALSE WHERE id = %s",
+            (interval, reminder_id),
         )
         conn.commit()
         cur.close()
+    finally:
+        _put(conn)
+
+
+def delete_reminder(reminder_id: int, chat_id: int) -> bool:
+    """Delete a reminder belonging to chat_id. Returns True if deleted."""
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM reminders WHERE id = %s AND chat_id = %s",
+            (reminder_id, chat_id),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        return deleted
     finally:
         _put(conn)

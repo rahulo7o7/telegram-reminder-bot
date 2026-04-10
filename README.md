@@ -1,74 +1,66 @@
-# Telegram Reminder Bot — Railway Deployment
+# Telegram Reminder Bot
 
-## What's fixed vs your original
+A fully working Telegram reminder bot deployable on Railway.
 
-| Problem | Fix |
+## Features
+- ➕ Create one-time, daily, weekly, or monthly reminders
+- 📋 List all upcoming reminders
+- 🗑 Delete reminders via inline buttons
+- ❌ Cancel mid-flow with /cancel
+- ⏰ Reminders fire within 30 seconds of scheduled time
+- 🔁 Repeating reminders auto-reschedule after firing
+
+## Setup
+
+### 1. Environment Variables (set in Railway)
+
+| Variable | Value |
 |---|---|
-| `AttributeError: 'Updater'...` | Use `.updater(None)` when building Application (webhook mode doesn't use Updater) |
-| `@app.on_event` deprecation warning | Replaced with FastAPI `lifespan` context manager |
-| No actual reminder sending | Added APScheduler checking every 60s for due reminders |
-| DB opened/closed per call | Connection pool via `psycopg2.pool.SimpleConnectionPool` |
-| `run_time` stored as TEXT | Now stored as proper `TIMESTAMP` column — enables `<= NOW()` comparison |
-| `sent` flag missing | Added `sent` column + `reschedule()` for weekly/monthly auto-advance |
-| Syntax error in db.py | Fixed duplicate `conn.commit()` lines |
+| `TOKEN` | Your BotFather token |
+| `WEBHOOK_URL` | `https://your-app.up.railway.app` (no trailing slash) |
+| `DATABASE_URL` | Auto-set by Railway Postgres plugin |
 
----
-
-## Environment Variables (set in Railway)
-
-| Variable | Example |
-|---|---|
-| `TOKEN` | `7123456789:AAF...` |
-| `WEBHOOK_URL` | `https://your-app.up.railway.app` |
-| `DATABASE_URL` | `postgresql://postgres:pass@host:5432/railway` |
-
-> **WEBHOOK_URL** = your Railway public domain (no trailing slash, no `/webhook`).  
-> Railway sets `DATABASE_URL` automatically when you add a Postgres plugin.
-
----
-
-## Deploy steps
+### 2. Railway Deploy Steps
 
 ```bash
-# 1. Push to GitHub
+# Push to GitHub
 git init && git add . && git commit -m "init"
 gh repo create reminder-bot --public --source=. --push
 
-# 2. Create Railway project from the repo
-#    (New Project → Deploy from GitHub repo)
-
-# 3. Add Railway Postgres plugin
-#    (+ New → Database → PostgreSQL)
-#    DATABASE_URL is injected automatically.
-
-# 4. Set TOKEN and WEBHOOK_URL in Railway → Variables tab
-
-# 5. Deploy — Railway runs:
-#    uvicorn main:app --host 0.0.0.0 --port $PORT
+# Railway: New Project → Deploy from GitHub repo
+# Railway: + New → Database → PostgreSQL  (DATABASE_URL auto-injected)
+# Railway: Variables → add TOKEN + WEBHOOK_URL
 ```
 
----
-
-## Local testing
+### 3. Local Testing with ngrok
 
 ```bash
 pip install -r requirements.txt
-
-export TOKEN="your_bot_token"
-export DATABASE_URL="postgresql://user:pass@localhost:5432/reminders"
-export WEBHOOK_URL="https://your-ngrok-or-tunnel-url"
-
+export TOKEN="..." DATABASE_URL="postgresql://..." WEBHOOK_URL="https://xxxx.ngrok-free.app"
+ngrok http 8000
 uvicorn main:app --reload --port 8000
 ```
 
-Use **ngrok** (`ngrok http 8000`) to get a public HTTPS URL for local webhook testing.
+## Time Zone Note
 
----
+The bot stores and compares times in UTC.  
+IST = UTC+5:30, so 9:00 AM IST → enter `03:30` UTC.
 
-## How reminders work
+## Architecture
 
-1. User sends `/new`, enters message, time (`YYYY-MM-DD HH:MM`), and repeat type.
-2. Reminder is saved to PostgreSQL with `sent=FALSE`.
-3. APScheduler checks every 60 seconds: any reminder where `run_time <= NOW()` and `sent=FALSE`?
-4. If yes → sends Telegram message → marks `sent=TRUE`.
-5. For weekly/monthly reminders → `run_time` is advanced by 7 days / 1 month and `sent` reset to `FALSE`.
+```
+Telegram → HTTPS webhook → FastAPI /webhook → PTB process_update → handlers
+                                                                         ↓
+APScheduler (every 30s) → get_due_reminders() → bot.send_message()
+```
+
+## Bot Commands
+
+| Command | Description |
+|---|---|
+| /start | Welcome message |
+| /new | Create a new reminder |
+| /list | View upcoming reminders |
+| /delete | Delete a reminder |
+| /cancel | Cancel current action |
+| /help | Help & time zone tips |
