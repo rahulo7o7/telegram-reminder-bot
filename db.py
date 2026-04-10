@@ -12,7 +12,7 @@ _pool: pool.SimpleConnectionPool | None = None
 def _get_pool():
     global _pool
     if _pool is None:
-        _pool = pool.SimpleConnectionPool(1, 5, DATABASE_URL, sslmode="require")
+        _pool = pool.SimpleConnectionPool(1, 5, DATABASE_URL, sslmode="require", connect_timeout=10)
     return _pool
 
 def _conn():
