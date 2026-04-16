@@ -4,6 +4,7 @@ import calendar
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
+import dateparser
 from fastapi import FastAPI, Request
 from telegram import (
     Update,
@@ -56,31 +57,29 @@ def now_ist() -> datetime:
 
 
 def ist_to_utc_str(ist_dt: datetime) -> str:
-    utc_dt = ist_dt.astimezone(timezone.utc)
-    return utc_dt.strftime("%Y-%m-%d %H:%M")
+    return ist_dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
 def format_ist(run_time_utc) -> str:
     if isinstance(run_time_utc, datetime):
         if run_time_utc.tzinfo is None:
             run_time_utc = run_time_utc.replace(tzinfo=timezone.utc)
-        ist_dt = run_time_utc.astimezone(IST)
-        return ist_dt.strftime("%d %b %Y, %I:%M %p IST")
+        return run_time_utc.astimezone(IST).strftime("%d %b %Y, %I:%M %p IST")
     return str(run_time_utc)
 
 
-def build_year_keyboard() -> InlineKeyboardMarkup:
-    current_year = now_ist().year
-    years = list(range(current_year, current_year + 10))
+# ── Date picker keyboards ──────────────────────────────────────────────────────
+
+def build_year_keyboard():
+    years = list(range(now_ist().year, now_ist().year + 10))
     rows = []
     for i in range(0, len(years), 3):
-        row = [InlineKeyboardButton(str(y), callback_data=f"dp_year_{y}") for y in years[i:i+3]]
-        rows.append(row)
+        rows.append([InlineKeyboardButton(str(y), callback_data=f"dp_year_{y}") for y in years[i:i+3]])
     rows.append([InlineKeyboardButton("❌ Cancel", callback_data="dp_cancel")])
     return InlineKeyboardMarkup(rows)
 
 
-def build_month_keyboard(year: int) -> InlineKeyboardMarkup:
+def build_month_keyboard(year):
     now = now_ist()
     rows = []
     for i in range(0, 12, 3):
@@ -95,11 +94,10 @@ def build_month_keyboard(year: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_day_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
+def build_day_keyboard(year, month):
     now = now_ist()
     _, days_in_month = calendar.monthrange(year, month)
-    rows = []
-    row = []
+    rows, row = [], []
     for d in range(1, days_in_month + 1):
         disabled = (year == now.year and month == now.month and d < now.day)
         label = str(d) + ("✗" if disabled else "")
@@ -114,32 +112,30 @@ def build_day_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_hour_keyboard(year: int, month: int, day: int) -> InlineKeyboardMarkup:
+def build_hour_keyboard(year, month, day):
     rows = []
     for i in range(0, 12, 4):
-        row = [
+        rows.append([
             InlineKeyboardButton(f"{h:02d}", callback_data=f"dp_hour_{year}_{month}_{day}_{h}")
             for h in range(i + 1, min(i + 5, 13))
-        ]
-        rows.append(row)
+        ])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"dp_back_day_{year}_{month}")])
     return InlineKeyboardMarkup(rows)
 
 
-def build_minute_keyboard(year: int, month: int, day: int, hour: int) -> InlineKeyboardMarkup:
+def build_minute_keyboard(year, month, day, hour):
     minutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
     rows = []
     for i in range(0, len(minutes), 4):
-        row = [
+        rows.append([
             InlineKeyboardButton(f":{m:02d}", callback_data=f"dp_min_{year}_{month}_{day}_{hour}_{m}")
             for m in minutes[i:i+4]
-        ]
-        rows.append(row)
+        ])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"dp_back_hour_{year}_{month}_{day}")])
     return InlineKeyboardMarkup(rows)
 
 
-def build_ampm_keyboard(year: int, month: int, day: int, hour: int, minute: int) -> InlineKeyboardMarkup:
+def build_ampm_keyboard(year, month, day, hour, minute):
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🌅 AM", callback_data=f"dp_ampm_{year}_{month}_{day}_{hour}_{minute}_AM"),
@@ -149,7 +145,7 @@ def build_ampm_keyboard(year: int, month: int, day: int, hour: int, minute: int)
     ])
 
 
-def build_repeat_keyboard() -> InlineKeyboardMarkup:
+def build_repeat_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔔 One-time", callback_data="repeat_once"),
          InlineKeyboardButton("📆 Daily",    callback_data="repeat_daily")],
@@ -157,6 +153,8 @@ def build_repeat_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton("🗓 Monthly",  callback_data="repeat_monthly")],
     ])
 
+
+# ── Command handlers ───────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "there"
@@ -178,13 +176,20 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ℹ️ *Reminder Bot Help*\n\n"
         "*Creating a reminder:*\n"
         "1. /new\n"
-        "2. Type your reminder message\n"
-        "3. Pick date using the inline buttons\n"
-        "4. Pick time (HH:MM AM/PM IST)\n"
+        "2. Choose time input method\n"
+        "3. Type your reminder message\n"
+        "4. Set the time\n"
         "5. Choose repeat type\n\n"
+        "*Time input options:*\n"
+        "📅 *Calendar picker* — tap through date & time\n"
+        "💬 *Natural language* — type like a human:\n"
+        "   • `tomorrow 9am`\n"
+        "   • `in 2 hours`\n"
+        "   • `next monday 6pm`\n"
+        "   • `25 april 8:30pm`\n\n"
         "*Repeat options:*\n"
         "🔔 One-time · 📆 Daily · 📅 Weekly · 🗓 Monthly\n\n"
-        "_All times are in IST (India Standard Time) 🇮🇳_\n\n"
+        "_All times are in IST 🇮🇳_\n\n"
         "/new · /list · /delete · /cancel",
         parse_mode="Markdown",
     )
@@ -200,11 +205,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def new_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_state[chat_id] = {"step": "msg"}
+    user_state[chat_id] = {"step": "choose_mode"}
+    keyboard = [[
+        InlineKeyboardButton("📅 Calendar picker", callback_data="mode_picker"),
+        InlineKeyboardButton("💬 Natural language", callback_data="mode_natural"),
+    ]]
     await update.message.reply_text(
-        "📝 *New Reminder*\n\nWhat should I remind you about?\n_/cancel to stop._",
+        "➕ *New Reminder*\n\nHow do you want to set the time?\n_/cancel to stop._",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -214,13 +223,11 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("📭 No upcoming reminders. Use /new to create one!")
         return
-
     lines = ["📋 *Your Reminders*\n"]
     for rid, message, run_time, repeat_type in rows:
         emoji = {"once": "🔔", "daily": "📆", "weekly": "📅", "monthly": "🗓"}.get(repeat_type, "🔔")
-        time_str = format_ist(run_time)
         label = REPEAT_LABELS.get(repeat_type, repeat_type)
-        lines.append(f"{emoji} *[{rid}]* {message}\n    ⏰ _{time_str}_ · {label}\n")
+        lines.append(f"{emoji} *[{rid}]* {message}\n    ⏰ _{format_ist(run_time)}_ · {label}\n")
     lines.append("_/delete to remove one_")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -231,19 +238,19 @@ async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("No reminders to delete.")
         return
-
     keyboard = []
     for rid, message, run_time, repeat_type in rows:
         short = message if len(message) <= 28 else message[:25] + "..."
         keyboard.append([InlineKeyboardButton(f"🗑 [{rid}] {short}", callback_data=f"del_{rid}")])
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="del_cancel")])
-
     await update.message.reply_text(
         "🗑 *Which reminder to delete?*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+
+# ── Text message handler ───────────────────────────────────────────────────────
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -256,18 +263,72 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = state["step"]
 
-    if step == "msg":
+    # ── Message step (both modes) ──────────────────────────────────────────
+    if step == "msg_then_picker":
         if len(text) > 500:
             await update.message.reply_text("⚠️ Message too long (max 500 chars). Try again:")
             return
         state["msg"] = text
         state["step"] = "date_year"
+        await update.message.reply_text("📅 *Pick a year:*", parse_mode="Markdown",
+                                        reply_markup=build_year_keyboard())
+
+    elif step == "msg_then_natural":
+        if len(text) > 500:
+            await update.message.reply_text("⚠️ Message too long (max 500 chars). Try again:")
+            return
+        state["msg"] = text
+        state["step"] = "natural_time"
         await update.message.reply_text(
-            "📅 *Pick a year:*",
+            "💬 *When should I remind you?*\n\n"
+            "Type naturally in IST, for example:\n"
+            "• `tomorrow 9am`\n"
+            "• `in 2 hours`\n"
+            "• `next monday 6:30pm`\n"
+            "• `25 april 8pm`\n"
+            "• `tonight 11pm`",
             parse_mode="Markdown",
-            reply_markup=build_year_keyboard(),
         )
 
+    # ── Natural language time parsing ──────────────────────────────────────
+    elif step == "natural_time":
+        parsed = dateparser.parse(
+            text,
+            settings={
+                "PREFER_DATES_FROM": "future",
+                "TIMEZONE": "Asia/Kolkata",
+                "RETURN_AS_TIMEZONE_AWARE": True,
+            }
+        )
+        if not parsed:
+            await update.message.reply_text(
+                "❌ Couldn't understand that time. Try:\n"
+                "• `tomorrow 9am`\n"
+                "• `in 2 hours`\n"
+                "• `next monday 6pm`\n"
+                "• `25 april 8pm`"
+            )
+            return
+
+        if parsed <= datetime.now(IST):
+            await update.message.reply_text(
+                "⚠️ That time is in the past! Try again with a future time:"
+            )
+            return
+
+        state["time_utc"] = ist_to_utc_str(parsed)
+        state["time_ist_display"] = parsed.strftime("%d %b %Y, %I:%M %p IST")
+        state["step"] = "repeat"
+
+        await update.message.reply_text(
+            f"✅ *Time set:* {state['time_ist_display']}\n\n"
+            "🔁 *How often should this repeat?*",
+            parse_mode="Markdown",
+            reply_markup=build_repeat_keyboard(),
+        )
+
+
+# ── Button callback handler ────────────────────────────────────────────────────
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -283,7 +344,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Cancelled.")
         return
 
-    # Delete flow
+    # ── Mode selection ─────────────────────────────────────────────────────
+    if data == "mode_picker":
+        state = user_state.get(chat_id, {})
+        state["step"] = "msg_then_picker"
+        user_state[chat_id] = state
+        await query.edit_message_text(
+            "📝 *What should I remind you about?*\n_/cancel to stop._",
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == "mode_natural":
+        state = user_state.get(chat_id, {})
+        state["step"] = "msg_then_natural"
+        user_state[chat_id] = state
+        await query.edit_message_text(
+            "📝 *What should I remind you about?*\n_/cancel to stop._",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Delete flow ────────────────────────────────────────────────────────
     if data.startswith("del_"):
         try:
             rid = int(data.split("_", 1)[1])
@@ -297,7 +379,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ Reminder not found or already deleted.")
         return
 
-    # Back navigation
+    # ── Calendar back navigation ───────────────────────────────────────────
     if data == "dp_back_year":
         await query.edit_message_text("📅 *Pick a year:*", parse_mode="Markdown",
                                       reply_markup=build_year_keyboard())
@@ -337,7 +419,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Forward navigation
+    # ── Calendar forward navigation ────────────────────────────────────────
     if data.startswith("dp_year_"):
         year = int(data.split("_")[2])
         await query.edit_message_text(f"📅 *Pick a month ({year}):*", parse_mode="Markdown",
@@ -347,11 +429,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("dp_month_"):
         parts = data.split("_")
         year, month = int(parts[2]), int(parts[3])
-        await query.edit_message_text(
-            f"📅 *Pick a day ({MONTHS[month-1]} {year}):*",
-            parse_mode="Markdown",
-            reply_markup=build_day_keyboard(year, month),
-        )
+        await query.edit_message_text(f"📅 *Pick a day ({MONTHS[month-1]} {year}):*",
+                                      parse_mode="Markdown",
+                                      reply_markup=build_day_keyboard(year, month))
         return
 
     if data.startswith("dp_day_"):
@@ -391,16 +471,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         year, month, day, hour, minute, ampm = (
             int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5]), int(parts[6]), parts[7]
         )
-        if ampm == "AM":
-            hour_24 = 0 if hour == 12 else hour
-        else:
-            hour_24 = hour if hour == 12 else hour + 12
-
+        hour_24 = (0 if hour == 12 else hour) if ampm == "AM" else (hour if hour == 12 else hour + 12)
         ist_dt = datetime(year, month, day, hour_24, minute, tzinfo=IST)
+
         if ist_dt <= now_ist():
-            await query.edit_message_text(
-                "⚠️ That time is in the past! Use /new to try again."
-            )
+            await query.edit_message_text("⚠️ That time is in the past! Use /new to try again.")
             user_state.pop(chat_id, None)
             return
 
@@ -421,6 +496,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Repeat selection ───────────────────────────────────────────────────
     if data.startswith("repeat_"):
         repeat_type = data.split("_", 1)[1]
         state = user_state.pop(chat_id, None)
@@ -442,16 +518,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Hidden debug command to check scheduler + DB health from Telegram."""
     from scheduler import _scheduler
-    from db import get_due_reminders, get_reminders
-    from datetime import datetime, timezone
-
     chat_id = update.effective_chat.id
     sched_status = "✅ running" if (_scheduler and _scheduler.running) else "❌ NOT running"
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
     try:
+        from db import get_due_reminders
         all_mine = get_reminders(chat_id)
         due = get_due_reminders()
         db_status = f"✅ connected — {len(all_mine)} pending reminder(s)"
@@ -459,7 +531,6 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         db_status = f"❌ DB error: {e}"
         due_str = "unknown"
-
     await update.message.reply_text(
         f"🔧 *Debug Info*\n\n"
         f"🕐 Server UTC: `{now_utc}`\n"
@@ -470,7 +541,9 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── Register handlers ──────────────────────────────────────────────────────────
 telegram_app.add_handler(CommandHandler("start",  start))
+telegram_app.add_handler(CommandHandler("help",   help_cmd))
 telegram_app.add_handler(CommandHandler("debug",  debug_cmd))
 telegram_app.add_handler(CommandHandler("new",    new_reminder))
 telegram_app.add_handler(CommandHandler("list",   list_reminders))
